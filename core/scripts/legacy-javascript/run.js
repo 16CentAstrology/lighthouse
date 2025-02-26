@@ -1,7 +1,7 @@
 /**
- * @license Copyright 2020 The Lighthouse Authors. All Rights Reserved.
- * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
- * Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the specific language governing permissions and limitations under the License.
+ * @license
+ * Copyright 2020 Google LLC
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 /* eslint-disable no-console */
@@ -9,13 +9,14 @@
 import fs from 'fs';
 import path from 'path';
 import {execFileSync} from 'child_process';
+import assert from 'assert';
 
 import glob from 'glob';
 
 import {makeHash} from './hash.js';
 import LegacyJavascript from '../../audits/byte-efficiency/legacy-javascript.js';
 import {networkRecordsToDevtoolsLog} from '../../test/network-records-to-devtools-log.js';
-import {LH_ROOT} from '../../../root.js';
+import {LH_ROOT} from '../../../shared/root.js';
 import {readJson} from '../../test/test-utils.js';
 
 const scriptDir = `${LH_ROOT}/core/scripts/legacy-javascript`;
@@ -34,14 +35,14 @@ const STAGE = process.env.STAGE || 'all';
 const mainCode = fs.readFileSync(`${scriptDir}/main.js`, 'utf-8');
 
 const plugins = LegacyJavascript.getTransformPatterns().map(pattern => pattern.name);
-const polyfills = LegacyJavascript.getPolyfillData();
+const polyfills = LegacyJavascript.getCoreJsPolyfillData();
 
 /**
  * @param {string} command
  * @param {string[]} args
  */
 function runCommand(command, args) {
-  execFileSync(command, args, {cwd: scriptDir});
+  return execFileSync(command, args, {cwd: scriptDir});
 }
 
 /**
@@ -81,7 +82,7 @@ async function createVariant(options) {
       `<title>${name}</title><script src=main.bundle.min.js></script><p>${name}</p>`);
 
     // Note: No babelrc will make babel a glorified `cp`.
-    runCommand('yarn', [
+    const babelOutputBuffer = runCommand('yarn', [
       'babel',
       `${dir}/main.js`,
       '--config-file', `${dir}/.babelrc`,
@@ -89,6 +90,7 @@ async function createVariant(options) {
       '-o', `${dir}/main.transpiled.js`,
       '--source-maps', 'inline',
     ]);
+    fs.writeFileSync(`${dir}/babel-stdout.txt`, babelOutputBuffer.toString());
 
     // Transform any require statements (like for core-js) into a big bundle.
     runCommand('yarn', [
@@ -116,11 +118,11 @@ async function createVariant(options) {
 
     legacyJavascriptResults = await getLegacyJavascriptResults(code, map, {sourceMaps: true});
     fs.writeFileSync(`${dir}/legacy-javascript.json`,
-      JSON.stringify(legacyJavascriptResults.items, null, 2));
+      JSON.stringify(legacyJavascriptResults, null, 2));
 
     legacyJavascriptResults = await getLegacyJavascriptResults(code, map, {sourceMaps: false});
     fs.writeFileSync(`${dir}/legacy-javascript-nomaps.json`,
-      JSON.stringify(legacyJavascriptResults.items, null, 2));
+      JSON.stringify(legacyJavascriptResults, null, 2));
   }
 }
 
@@ -133,12 +135,14 @@ async function createVariant(options) {
 function getLegacyJavascriptResults(code, map, {sourceMaps}) {
   // Instead of running Lighthouse, use LegacyJavascript directly. Requires some setup.
   // Much faster than running Lighthouse.
-  const documentUrl = 'http://localhost/index.html'; // These URLs don't matter.
+  const documentUrl = 'https://localhost/index.html'; // These URLs don't matter.
   const scriptUrl = 'https://localhost/main.bundle.min.js';
   const scriptId = '10001';
+  const responseHeaders = [{name: 'Content-Encoding', value: 'gzip'}];
   const networkRecords = [
-    {url: documentUrl, requestId: '1000.1', resourceType: /** @type {const} */ ('Document')},
-    {url: scriptUrl, requestId: '1000.2'},
+    {url: documentUrl, requestId: '1000.1', resourceType: /** @type {const} */ ('Document'),
+      responseHeaders},
+    {url: scriptUrl, requestId: '1000.2', responseHeaders},
   ];
   const devtoolsLogs = networkRecordsToDevtoolsLog(networkRecords);
 
@@ -172,17 +176,26 @@ function makeSummary(legacyJavascriptFilename) {
   let totalSignals = 0;
   const variants = [];
   for (const dir of glob.sync('*/*', {cwd: VARIANT_DIR})) {
-    /** @type {import('../../audits/byte-efficiency/legacy-javascript.js').Item[]} */
-    const legacyJavascriptItems = readJson(`${VARIANT_DIR}/${dir}/${legacyJavascriptFilename}`);
+    /** @type {import('../../audits/byte-efficiency/byte-efficiency-audit.js').ByteEfficiencyProduct} */
+    const legacyJavascript = readJson(`${VARIANT_DIR}/${dir}/${legacyJavascriptFilename}`);
+    const items = /** @type {import('../../audits/byte-efficiency/legacy-javascript.js').Item[]} */(
+      legacyJavascript.items);
 
     const signals = [];
-    for (const item of legacyJavascriptItems) {
+    for (const item of items) {
       for (const subItem of item.subItems.items) {
         signals.push(subItem.signal);
       }
     }
     totalSignals += signals.length;
     variants.push({name: dir, signals: signals.join(', ')});
+
+    if (dir.includes('core-js') && !legacyJavascriptFilename.includes('nomaps')) {
+      const isCoreJs2Variant = dir.includes('core-js-2');
+      const detectedCoreJs2 = !!legacyJavascript.warnings?.length;
+      assert.equal(detectedCoreJs2, isCoreJs2Variant,
+        `detected core js version wrong for variant: ${dir}`);
+    }
   }
   return {
     totalSignals,
@@ -244,15 +257,15 @@ async function main() {
     });
   }
 
-  for (const coreJsVersion of ['2.6.12', '3.19.1']) {
+  for (const coreJsVersion of ['2.6.12', '3.40.0']) {
     const major = coreJsVersion.split('.')[0];
     removeCoreJs();
     installCoreJs(coreJsVersion);
 
     const moduleOptions = [
-      {esmodules: false},
+      {esmodules: false, bugfixes: false},
       // Output: https://gist.github.com/connorjclark/515d05094ffd1fc038894a77156bf226
-      {esmodules: true},
+      {esmodules: true, bugfixes: false},
       {esmodules: true, bugfixes: true},
     ];
     for (const {esmodules, bugfixes} of moduleOptions) {
@@ -269,6 +282,7 @@ async function main() {
                 useBuiltIns: 'entry',
                 corejs: major,
                 bugfixes,
+                debug: true,
               },
             ],
           ],

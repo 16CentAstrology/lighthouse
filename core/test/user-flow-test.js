@@ -1,7 +1,7 @@
 /**
- * @license Copyright 2021 The Lighthouse Authors. All Rights Reserved.
- * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
- * Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the specific language governing permissions and limitations under the License.
+ * @license
+ * Copyright 2021 Google LLC
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 import jestMock from 'jest-mock';
@@ -270,8 +270,8 @@ describe('UserFlow', () => {
 
       expect(timespanModule.startTimespanGather).toHaveBeenCalledTimes(2);
       expect(flow._gatherSteps).toMatchObject([
-        {flags: {name: 'My Timespan'}},
-        {flags: undefined},
+        {flags: {name: 'My Timespan', usePassiveGathering: true}},
+        {flags: {usePassiveGathering: true}},
       ]);
     });
 
@@ -323,8 +323,8 @@ describe('UserFlow', () => {
 
       expect(snapshotModule.snapshotGather).toHaveBeenCalledTimes(2);
       expect(flow._gatherSteps).toMatchObject([
-        {flags: {name: 'My Snapshot'}},
-        {flags: undefined},
+        {flags: {name: 'My Snapshot', usePassiveGathering: true}},
+        {flags: {usePassiveGathering: true}},
       ]);
     });
 
@@ -405,7 +405,7 @@ describe('UserFlow', () => {
         },
       }));
 
-      /** @type {LH.Config.Json} */
+      /** @type {LH.Config} */
       const flowConfig = {
         extends: 'lighthouse:default',
         settings: {
@@ -459,7 +459,7 @@ describe('UserFlow', () => {
         [
           gatherSteps[0].artifacts,
           {
-            config: {
+            resolvedConfig: {
               settings: {
                 skipAudits: ['uses-http2'],
               },
@@ -469,7 +469,7 @@ describe('UserFlow', () => {
         [
           gatherSteps[1].artifacts,
           {
-            config: {
+            resolvedConfig: {
               settings: {
                 onlyCategories: ['performance'],
               },
@@ -479,7 +479,7 @@ describe('UserFlow', () => {
         [
           gatherSteps[2].artifacts,
           {
-            config: {
+            resolvedConfig: {
               settings: {
                 onlyCategories: ['accessibility'],
               },
